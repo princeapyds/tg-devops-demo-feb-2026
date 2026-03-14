@@ -2,42 +2,55 @@ pipeline {
     agent any
 
     environment {
-        IMAGE_NAME = "devops-demo-app"
-        CONTAINER_NAME = "devops-demo-container"
+        AWS_REGION      = 'ap-south-1'
+        ECR_REGISTRY    = '191303960810.dkr.ecr.ap-south-1.amazonaws.com/devops-demo' // ECR URI
+        ECR_REPO        = 'devops-demo'
+        IMAGE_TAG       = "${BUILD_NUMBER}"
+        CLUSTER_NAME    = 'devops-demo-cluster'
     }
 
     stages {
-
-stage('Checkout Code') {
-    steps {
-        checkout scm
-    }
-}
+        stage('Clone Code') {
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/princeapyds/tg_devops_test_feb26.git'
+            }
+        }
 
         stage('Build Docker Image') {
             steps {
-                echo "Building Docker Image..."
-                sh "docker build -t ${IMAGE_NAME} ."
+                sh "docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} ."
             }
         }
 
-        stage('Stop Old Container') {
+        stage('Push to ECR') {
             steps {
-                script {
-                    sh """
-                    docker rm -f ${CONTAINER_NAME} || true
-                    """
-                }
-            }
-        }
-
-        stage('Run New Container') {
-            steps {
-                echo "Running New Container..."
                 sh """
-                docker run -d -p 5000:5000 --name ${CONTAINER_NAME} ${IMAGE_NAME}
+                    aws ecr get-login-password --region ${AWS_REGION} | \
+                    docker login --username AWS --password-stdin ${ECR_REGISTRY}
+                    docker push ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}
                 """
             }
+        }
+
+        stage('Deploy to EKS') {
+            steps {
+                sh """
+                    sed -i 's|IMAGE_PLACEHOLDER|${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}|g' k8s/deployment.yaml
+                    kubectl apply -f k8s/deployment.yaml
+                    kubectl apply -f k8s/service.yaml
+                    kubectl rollout status deployment/devops-demo
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Deployed successfully! Build #${BUILD_NUMBER}"
+        }
+        failure {
+            echo "Deployment failed. Check logs above."
         }
     }
 }
